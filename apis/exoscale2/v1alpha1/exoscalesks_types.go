@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"fmt"
 	"reflect"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,7 +64,6 @@ type ExoscaleSKSStatus struct {
 
 // +kubebuilder:object:root=true
 
-// A ExoscaleSKS is an example API type.
 // +kubebuilder:printcolumn:name="READY",type="string",JSONPath=".status.conditions[?(@.type=='Ready')].status"
 // +kubebuilder:printcolumn:name="SYNCED",type="string",JSONPath=".status.conditions[?(@.type=='Synced')].status"
 // +kubebuilder:printcolumn:name="EXTERNAL-NAME",type="string",JSONPath=".metadata.annotations.crossplane\\.io/external-name"
@@ -96,5 +96,10 @@ var (
 )
 
 func init() {
+	fmt.Printf("--> gs: kind: %v\n", ExoscaleSKSKind)
+	fmt.Printf("--> gs: groupkind: %v\n", ExoscaleSKSGroupKind)
+	fmt.Printf("--> gs: kindapiversion: %v\n", ExoscaleSKSKindAPIVersion)
+	fmt.Printf("--> gs: groupversionkind: %v\n", ExoscaleSKSGroupVersionKind)
+
 	SchemeBuilder.Register(&ExoscaleSKS{}, &ExoscaleSKSList{})
 }

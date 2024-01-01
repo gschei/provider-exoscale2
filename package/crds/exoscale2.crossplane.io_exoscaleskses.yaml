@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.12.1
-  name: exoscaleskses.exoscale2.exoscale2.crossplane.io
+  name: exoscaleskses.exoscale2.crossplane.io
 spec:
-  group: exoscale2.exoscale2.crossplane.io
+  group: exoscale2.crossplane.io
   names:
     categories:
     - crossplane
@@ -34,7 +34,6 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: A ExoscaleSKS is an example API type.
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation

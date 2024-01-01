@@ -16,7 +16,7 @@ limitations under the License.
 
 // Package v1alpha1 contains the v1alpha1 group Sample resources of the Exoscale2 provider.
 // +kubebuilder:object:generate=true
-// +groupName=exoscale2.exoscale2.crossplane.io
+// +groupName=exoscale2.crossplane.io
 // +versionName=v1alpha1
 package v1alpha1
 
@@ -27,7 +27,7 @@ import (
 
 // Package type metadata.
 const (
-	Group   = "exoscale2.exoscale2.crossplane.io"
+	Group   = "exoscale2.crossplane.io"
 	Version = "v1alpha1"
 )
 

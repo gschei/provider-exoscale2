@@ -18,9 +18,15 @@ package exoscalesks
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"time"
+
+	"github.com/crossplane/provider-exoscale2/internal/controller/exoapi"
+	exo "github.com/exoscale/egoscale/v2"
 
 	"github.com/pkg/errors"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -28,6 +34,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/connection"
 	"github.com/crossplane/crossplane-runtime/pkg/controller"
 	"github.com/crossplane/crossplane-runtime/pkg/event"
+	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	"github.com/crossplane/crossplane-runtime/pkg/ratelimiter"
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
@@ -46,15 +53,20 @@ const (
 	errNewClient = "cannot create new Service"
 )
 
-// A NoOpService does nothing.
-type NoOpService struct{}
-
-var (
-	newNoOpService = func(_ []byte) (interface{}, error) { return &NoOpService{}, nil }
+const (
+	exoApiKey    = "EXOSCALE_API_KEY"
+	exoApiSecret = "EXOSCALE_API_SECRET"
 )
+
+type ExoscaleSKSController struct{}
+
+var log logging.Logger
 
 // Setup adds a controller that reconciles ExoscaleSKS managed resources.
 func Setup(mgr ctrl.Manager, o controller.Options) error {
+	log = o.Logger
+	log.Info("Setting up ExoscaleSKS Controller")
+
 	name := managed.ControllerName(v1alpha1.ExoscaleSKSGroupKind)
 
 	cps := []managed.ConnectionPublisher{managed.NewAPISecretPublisher(mgr.GetClient(), mgr.GetScheme())}
@@ -65,13 +77,14 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 	r := managed.NewReconciler(mgr,
 		resource.ManagedKind(v1alpha1.ExoscaleSKSGroupVersionKind),
 		managed.WithExternalConnecter(&connector{
-			kube:         mgr.GetClient(),
-			usage:        resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
-			newServiceFn: newNoOpService}),
+			kube:  mgr.GetClient(),
+			usage: resource.NewProviderConfigUsageTracker(mgr.GetClient(), &apisv1alpha1.ProviderConfigUsage{}),
+		}),
 		managed.WithLogger(o.Logger.WithValues("controller", name)),
 		managed.WithPollInterval(o.PollInterval),
 		managed.WithRecorder(event.NewAPIRecorder(mgr.GetEventRecorderFor(name))),
-		managed.WithConnectionPublishers(cps...))
+		managed.WithConnectionPublishers(cps...),
+		managed.WithTimeout(10*time.Minute))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
@@ -84,9 +97,8 @@ func Setup(mgr ctrl.Manager, o controller.Options) error {
 // A connector is expected to produce an ExternalClient when its Connect method
 // is called.
 type connector struct {
-	kube         client.Client
-	usage        resource.Tracker
-	newServiceFn func(creds []byte) (interface{}, error)
+	kube  client.Client
+	usage resource.Tracker
 }
 
 // Connect typically produces an ExternalClient by:
@@ -95,6 +107,8 @@ type connector struct {
 // 3. Getting the credentials specified by the ProviderConfig.
 // 4. Using the credentials to form a client.
 func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.ExternalClient, error) {
+	log.Info("entering connect")
+
 	cr, ok := mg.(*v1alpha1.ExoscaleSKS)
 	if !ok {
 		return nil, errors.New(errNotExoscaleSKS)
@@ -109,42 +123,100 @@ func (c *connector) Connect(ctx context.Context, mg resource.Managed) (managed.E
 		return nil, errors.Wrap(err, errGetPC)
 	}
 
-	cd := pc.Spec.Credentials
-	data, err := resource.CommonCredentialExtractor(ctx, cd.Source, c.kube, cd.CommonCredentialSelectors)
+	//fmt.Printf("  providerconfig found %v \n", pc.Spec.Credentials.APISecretRef.Name)
+
+	secret := &corev1.Secret{}
+
+	c.kube.Get(ctx, client.ObjectKey{
+		Namespace: pc.Spec.Credentials.APISecretRef.Namespace,
+		Name:      pc.Spec.Credentials.APISecretRef.Name,
+	}, secret)
+
+	exoKey, err := parseSecretKey(secret, exoApiKey)
 	if err != nil {
-		return nil, errors.Wrap(err, errGetCreds)
+		return nil, err
 	}
 
-	svc, err := c.newServiceFn(data)
+	exoSecret, err := parseSecretKey(secret, exoApiSecret)
 	if err != nil {
-		return nil, errors.Wrap(err, errNewClient)
+		return nil, err
 	}
 
-	return &external{service: svc}, nil
+	return &external{
+		exoApiKey:    exoKey,
+		exoApiSecret: exoSecret,
+	}, nil
+}
+
+func parseSecretKey(secret *corev1.Secret, key string) (string, error) {
+	data := secret.Data[key]
+	if data == nil {
+		return "", errors.New(fmt.Sprintf("Key %v not found in secret %v", key, secret.Name))
+	}
+
+	value, err := base64.StdEncoding.DecodeString(string(data))
+	if err != nil {
+		return "", errors.New(fmt.Sprintf("Cannot decode %v: %v", key, err))
+	}
+	return string(value), nil
 }
 
 // An ExternalClient observes, then either creates, updates, or deletes an
 // external resource to ensure it reflects the managed resource's desired state.
 type external struct {
-	// A 'client' used to connect to the external resource API. In practice this
-	// would be something like an AWS SDK client.
-	service interface{}
+	exoApiKey    string
+	exoApiSecret string
 }
 
 func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.ExternalObservation, error) {
+	log.Info(fmt.Sprintf("Entering Observe for %v", mg.GetName()))
+
 	cr, ok := mg.(*v1alpha1.ExoscaleSKS)
 	if !ok {
 		return managed.ExternalObservation{}, errors.New(errNotExoscaleSKS)
 	}
 
 	// These fmt statements should be removed in the real implementation.
-	fmt.Printf("Observing: %+v", cr)
+	//fmt.Printf("Observing: %+v", cr)
+
+	clusters, err := exoapi.RetrieveClusters(c.exoApiKey, c.exoApiSecret, cr.Spec.ForProvider.Zone)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.New(fmt.Sprintf("failed to retrieve sks clusters from exoscale: %v", err))
+	}
+
+	// todo: also check zone
+	var found bool = false
+	for _, c := range *&clusters.Clusters {
+		if c.Name == cr.Name {
+			found = true
+		}
+	}
+
+	log.Info(fmt.Sprintf("Observe: result for %v: found %v", mg.GetName(), found))
+
+	exoClient, err := exo.NewClient(c.exoApiKey, c.exoApiSecret)
+	if err != nil {
+		return managed.ExternalObservation{}, errors.New(fmt.Sprintf("Error creating Exoscale Client: %v", err))
+	}
+
+	found = true
+	skscluster, err := exoClient.FindSKSCluster(ctx, cr.Spec.ForProvider.Zone, cr.Name)
+	if err != nil {
+		if err.Error() == "resource not found" {
+			found = false
+			log.Info(fmt.Sprintf("Observe: result for %v: found false", mg.GetName()))
+		} else {
+			return managed.ExternalObservation{}, errors.New(fmt.Sprintf("Error retrieving Exoscale SKS Cluster Info: %v", err))
+		}
+	} else {
+		log.Info(fmt.Sprintf("Observe: result for %v: found %v", *skscluster.Name, *skscluster.ID))
+	}
 
 	return managed.ExternalObservation{
 		// Return false when the external resource does not exist. This lets
 		// the managed resource reconciler know that it needs to call Create to
 		// (re)create the resource, or that it has successfully been deleted.
-		ResourceExists: true,
+		ResourceExists: found,
 
 		// Return false when the external resource exists, but it not up to date
 		// with the desired managed resource state. This lets the managed
@@ -158,12 +230,41 @@ func (c *external) Observe(ctx context.Context, mg resource.Managed) (managed.Ex
 }
 
 func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.ExternalCreation, error) {
+	log.Info(fmt.Sprintf("Entering Create for %v", mg.GetName()))
+
 	cr, ok := mg.(*v1alpha1.ExoscaleSKS)
 	if !ok {
 		return managed.ExternalCreation{}, errors.New(errNotExoscaleSKS)
 	}
 
-	fmt.Printf("Creating: %+v", cr)
+	//fmt.Printf("Creating: %+v", cr)
+
+	exoClient, err := exo.NewClient(c.exoApiKey, c.exoApiSecret)
+	if err != nil {
+		return managed.ExternalCreation{}, errors.New(fmt.Sprintf("Error creating Exoscale Client: %v", err))
+	}
+
+	version := "1.28.4"
+	skscluster := exo.SKSCluster{
+		Name:         &cr.Spec.ForProvider.Name,
+		ServiceLevel: &cr.Spec.ForProvider.ServiceLevel,
+		Version:      &version,
+		CNI:          &cr.Spec.ForProvider.Cni,
+		Zone:         &cr.Spec.ForProvider.Zone,
+	}
+
+	dl, ok := ctx.Deadline()
+	log.Info(fmt.Sprintf("deadline info: time: %v ok %v", dl, ok))
+
+	log.Info(fmt.Sprintf("starting creation of SKS Cluster %v in zone %v", *skscluster.Name, *skscluster.Zone))
+
+	sksclusteroutput, err := exoClient.CreateSKSCluster(context.Background(), cr.Spec.ForProvider.Zone, &skscluster)
+	if err != nil {
+		log.Info(fmt.Sprintf("Error creating SKS Cluster %v", err))
+		return managed.ExternalCreation{}, errors.New(fmt.Sprintf("Error creating Exoscale SKS Cluster: %v", err))
+	}
+
+	log.Info("successfully created SKS Cluster %v", *sksclusteroutput.ID)
 
 	return managed.ExternalCreation{
 		// Optionally return any details that may be required to connect to the
@@ -173,6 +274,8 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.ExternalUpdate, error) {
+	log.Info(fmt.Sprintf("Entering Update for %v", mg.GetName()))
+
 	cr, ok := mg.(*v1alpha1.ExoscaleSKS)
 	if !ok {
 		return managed.ExternalUpdate{}, errors.New(errNotExoscaleSKS)
@@ -188,6 +291,8 @@ func (c *external) Update(ctx context.Context, mg resource.Managed) (managed.Ext
 }
 
 func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
+	log.Info(fmt.Sprintf("Entering Delete for %v", mg.GetName()))
+
 	cr, ok := mg.(*v1alpha1.ExoscaleSKS)
 	if !ok {
 		return errors.New(errNotExoscaleSKS)

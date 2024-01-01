@@ -1,0 +1,10 @@
+apiVersion: exoscale2.crossplane.io/v1alpha1
+kind: ProviderConfig
+metadata:
+  name: provider-config
+spec:
+  credentials:
+    apiSecretRef:
+      name: exo-api-credentials
+      namespace: test-provider
+    source: Secret

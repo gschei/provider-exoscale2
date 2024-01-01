@@ -1,0 +1,17 @@
+apiVersion: exoscale2.crossplane.io/v1alpha1
+kind: ExoscaleSKS
+metadata:
+  name: gs-sks-3
+spec:
+  forProvider:
+    name: gs-sks-3
+    zone: at-vie-2
+    cni: cilium
+    nodepoolDiskSize: 20
+    nodepoolInstanceType: standard.small
+    nodepoolName: gs-cil-np01
+    nodepoolSecurityGroup: sks-security-group-cilium
+    nodepoolSize: 2
+    serviceLevel: starter
+  providerConfigRef:
+    name: provider-config2 

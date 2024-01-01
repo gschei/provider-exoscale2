@@ -20,13 +20,15 @@ package apis
 import (
 	"k8s.io/apimachinery/pkg/runtime"
 
-	exoscale2v1alpha1 "github.com/crossplane/provider-exoscale2/apis/v1alpha1"
+	exoscale2v1alpha1 "github.com/crossplane/provider-exoscale2/apis/exoscale2/v1alpha1"
+	v1alpha1 "github.com/crossplane/provider-exoscale2/apis/v1alpha1"
 )
 
 func init() {
 	// Register the types with the Scheme so the components can map objects to GroupVersionKinds and back
 	AddToSchemes = append(AddToSchemes,
 		exoscale2v1alpha1.SchemeBuilder.AddToScheme,
+		v1alpha1.SchemeBuilder.AddToScheme,
 	)
 }
 

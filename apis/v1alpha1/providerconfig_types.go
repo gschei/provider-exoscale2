@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"reflect"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -36,6 +37,9 @@ type ProviderCredentials struct {
 	// Source of the provider credentials.
 	// +kubebuilder:validation:Enum=None;Secret;InjectedIdentity;Environment;Filesystem
 	Source xpv1.CredentialsSource `json:"source"`
+
+	// APISecretRef is the reference to the secret with the exoscale API Key and Secret.
+	APISecretRef corev1.SecretReference `json:"apiSecretRef,omitempty"`
 
 	xpv1.CommonCredentialSelectors `json:",inline"`
 }
