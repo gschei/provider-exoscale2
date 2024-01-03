@@ -27,6 +27,7 @@ import (
 
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,6 +40,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/reconciler/managed"
 	"github.com/crossplane/crossplane-runtime/pkg/resource"
 
+	xpv1 "github.com/crossplane/crossplane-runtime/apis/common/v1"
 	"github.com/crossplane/provider-exoscale2/apis/exoscale2/v1alpha1"
 	apisv1alpha1 "github.com/crossplane/provider-exoscale2/apis/v1alpha1"
 	"github.com/crossplane/provider-exoscale2/internal/features"
@@ -56,6 +58,9 @@ const (
 const (
 	exoApiKey    = "EXOSCALE_API_KEY"
 	exoApiSecret = "EXOSCALE_API_SECRET"
+
+	annotationClusterId = "exoscale2.crossplane.io/cluster-id"
+	annotationZone      = "exoscale2.crossplane.io/zone"
 )
 
 type ExoscaleSKSController struct{}
@@ -253,18 +258,24 @@ func (c *external) Create(ctx context.Context, mg resource.Managed) (managed.Ext
 		Zone:         &cr.Spec.ForProvider.Zone,
 	}
 
-	dl, ok := ctx.Deadline()
-	log.Info(fmt.Sprintf("deadline info: time: %v ok %v", dl, ok))
-
 	log.Info(fmt.Sprintf("starting creation of SKS Cluster %v in zone %v", *skscluster.Name, *skscluster.Zone))
 
-	sksclusteroutput, err := exoClient.CreateSKSCluster(context.Background(), cr.Spec.ForProvider.Zone, &skscluster)
+	// timeout must be increased, otherwise creation fails as SKS creation takes longer than 1 minute default
+	exoClient.SetTimeout(10 * time.Minute)
+
+	cr.SetConditions(xpv1.Creating())
+
+	sksclusteroutput, err := exoClient.CreateSKSCluster(ctx, cr.Spec.ForProvider.Zone, &skscluster)
 	if err != nil {
-		log.Info(fmt.Sprintf("Error creating SKS Cluster %v", err))
 		return managed.ExternalCreation{}, errors.New(fmt.Sprintf("Error creating Exoscale SKS Cluster: %v", err))
 	}
 
-	log.Info("successfully created SKS Cluster %v", *sksclusteroutput.ID)
+	log.Info(fmt.Sprintf("successfully created SKS Cluster %v", *sksclusteroutput.ID))
+
+	metav1.SetMetaDataAnnotation(&cr.ObjectMeta, annotationClusterId, *sksclusteroutput.ID)
+	metav1.SetMetaDataAnnotation(&cr.ObjectMeta, annotationZone, *sksclusteroutput.Zone)
+
+	cr.SetConditions(xpv1.Available())
 
 	return managed.ExternalCreation{
 		// Optionally return any details that may be required to connect to the
@@ -298,7 +309,25 @@ func (c *external) Delete(ctx context.Context, mg resource.Managed) error {
 		return errors.New(errNotExoscaleSKS)
 	}
 
-	fmt.Printf("Deleting: %+v", cr)
+	clusterId := cr.GetAnnotations()[annotationClusterId]
+	zone := cr.GetAnnotations()[annotationZone]
+
+	log.Info(fmt.Sprintf("starting deletion of SKS Cluster %v Id %v in zone %v", cr.Name, clusterId, zone))
+
+	//fmt.Printf("Deleting: %+v", cr)
+
+	exoClient, err := exo.NewClient(c.exoApiKey, c.exoApiSecret)
+	if err != nil {
+		return errors.New(fmt.Sprintf("Error creating Exoscale Client: %v", err))
+	}
+
+	cr.SetConditions(xpv1.Deleting())
+
+	exoClient.DeleteSKSCluster(ctx, zone, &exo.SKSCluster{ID: &clusterId})
+
+	cr.SetConditions(xpv1.Available())
+
+	log.Info(fmt.Sprintf("finished deletion of SKS Cluster %v Id %v in zone %v", cr.Name, clusterId, zone))
 
 	return nil
 }

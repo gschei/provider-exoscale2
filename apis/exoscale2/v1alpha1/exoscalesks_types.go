@@ -17,7 +17,6 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"fmt"
 	"reflect"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,10 +95,5 @@ var (
 )
 
 func init() {
-	fmt.Printf("--> gs: kind: %v\n", ExoscaleSKSKind)
-	fmt.Printf("--> gs: groupkind: %v\n", ExoscaleSKSGroupKind)
-	fmt.Printf("--> gs: kindapiversion: %v\n", ExoscaleSKSKindAPIVersion)
-	fmt.Printf("--> gs: groupversionkind: %v\n", ExoscaleSKSGroupVersionKind)
-
 	SchemeBuilder.Register(&ExoscaleSKS{}, &ExoscaleSKSList{})
 }
